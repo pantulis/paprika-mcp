@@ -2,6 +2,7 @@
 
 import json
 import os
+import secrets
 import sys
 from getpass import getpass
 
@@ -50,12 +51,80 @@ def setup_credentials():
     print("\nYou can now start the MCP server with: paprika-mcp")
 
 
+def serve():
+    """Run the remote (Streamable HTTP + OAuth) server, for clients like Gemini.
+
+    Reads PUBLIC_BASE_URL, MCP_PASSPHRASE, JWT_SECRET (required) and PORT,
+    PAPRIKA_MCP_DB (optional) from the environment. Local stdio clients
+    (e.g. Claude Code) should keep using the default `paprika-mcp` entrypoint
+    instead -- this is only for remote access.
+    """
+    import uvicorn
+
+    from paprika_mcp.http.app import create_app
+
+    app = create_app()
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+def register_client():
+    """Register an OAuth client (e.g. Gemini) for the HTTP transport.
+
+    Usage: paprika-mcp register-client --redirect-uri <uri> [--name <name>]
+
+    Run this once per client, against the same environment/database the
+    `serve` command uses (e.g. via `fly ssh console` in production). Prints
+    the Client ID and Secret exactly once -- copy them into the client's
+    OAuth setup form immediately.
+    """
+    from paprika_mcp.http.config import Config
+    from paprika_mcp.http.store import Store
+
+    args = sys.argv[2:]
+    redirect_uri = None
+    client_name = "Gemini"
+    i = 0
+    while i < len(args):
+        if args[i] == "--redirect-uri" and i + 1 < len(args):
+            redirect_uri = args[i + 1]
+            i += 2
+        elif args[i] == "--name" and i + 1 < len(args):
+            client_name = args[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    if not redirect_uri:
+        print("Usage: paprika-mcp register-client --redirect-uri <uri> [--name <name>]")
+        sys.exit(1)
+
+    config = Config.from_env()
+    store = Store(config.db_path)
+
+    client_id = secrets.token_urlsafe(16)
+    client_secret = secrets.token_urlsafe(32)
+    store.create_client(client_id, client_secret, client_name, redirect_uri)
+
+    print("Client registered.")
+    print(f"  Client ID:     {client_id}")
+    print(f"  Client Secret: {client_secret}")
+    print(f"  Redirect URI:  {redirect_uri}")
+    print()
+    print("This secret is shown only once. Paste the Client ID and Secret into")
+    print("the client's 'Advanced features' OAuth credentials form now.")
+
+
 def main():
     """Main CLI entry point."""
     if len(sys.argv) > 1 and sys.argv[1] == "setup":
         setup_credentials()
+    elif len(sys.argv) > 1 and sys.argv[1] == "serve":
+        serve()
+    elif len(sys.argv) > 1 and sys.argv[1] == "register-client":
+        register_client()
     else:
-        # Start the server
+        # Start the server (stdio, for local MCP clients)
         from paprika_mcp.server import run
 
         run()

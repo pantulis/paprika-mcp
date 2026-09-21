@@ -15,16 +15,21 @@ python = ["3.10", "3.11", "3.12", "3.13"]
 
 [project]
 name = "paprika-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server for Paprika recipe manager"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    { name = "Brian Tkatch" }
+    { name = "Brian Tkatch" },
+    { name = "Juan Lupión" },
 ]
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.30,<2",
     "paprika-recipes @ git+https://github.com/briantkatch/paprika-recipes@2.5.2",
+    "starlette>=0.47",
+    "uvicorn[standard]>=0.35",
+    "pyjwt>=2.10",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +39,10 @@ dev = [
     "ruff>=0.6.0",
     "mypy>=1.11.0",
     "pyupgrade>=3.17.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+    "asgi-lifespan>=2.1.0",
 ]
 
 [project.scripts]
@@ -41,6 +50,10 @@ paprika-mcp = "paprika_mcp.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/paprika_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
 
 [tool.black]
 line-length = 88

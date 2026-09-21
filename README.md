@@ -1,12 +1,17 @@
 # Paprika MCP Server
 
-A Model Context Protocol (MCP) server for the Paprika Recipe Manager, allowing AI assistants to search, read, and update recipes.
+A Model Context Protocol (MCP) server for the Paprika Recipe Manager, allowing AI assistants to search, read, and update recipes, manage grocery lists, and plan meals.
+
+This is a fork of [briantkatch/paprika-mcp](https://github.com/briantkatch/paprika-mcp) that adds grocery list, meal plan, and recipe create/trash tools, plus a remote (Streamable HTTP + OAuth 2.1) transport so the server can be hosted in the cloud and connected to clients like **Gemini's custom-app connector**, not just run locally over stdio.
 
 ## Features
 
-- **Search Recipes**: Search across recipe titles, ingredients, categories, directions, and notes with context
-- **Read Recipes**: Get full recipe data including all metadata, ingredients, and directions
-- **Update Recipes**: Safely update recipe fields using find/replace (requires user confirmation)
+- **Recipes**: search, read, create, update (find/replace), and trash (soft delete)
+- **Groceries**: list, add items, add a recipe's ingredients in one step, and check items off
+- **Meal plan**: list entries by date range, plan a meal (linked to a recipe or text-only)
+- **Pantry**: list inventory (read-only -- see [Pantry is read-only](#pantry-is-read-only))
+- **Categories**: list, with hierarchy
+- **Two transports**: stdio for local clients (Claude Code, Claude Desktop) with no auth, and Streamable HTTP + OAuth 2.1 for remote clients (Gemini)
 
 ## Prerequisites
 
@@ -249,6 +254,91 @@ Update a recipe field using find/replace.
 }
 ```
 
+### New tools (this fork)
+
+All of these follow the same call shape as the tools above (`args` dict in, `list[TextContent]` out) and are registered in [`tools/__init__.py`](src/paprika_mcp/tools/__init__.py). Full parameter docs live in each tool's `TOOL_DEFINITION`.
+
+- `create_recipe` -- create a new recipe. Category names are resolved to UUIDs automatically.
+- `trash_recipe` -- soft-delete (`in_trash: true`); Paprika has no permanent delete via the API.
+- `list_groceries` / `add_groceries` / `check_off_groceries` -- manage grocery items. Checking an item off is also how you clear it; there's no hard delete.
+- `add_recipe_to_grocery_list` -- the "add this recipe's ingredients to my list" flow, one grocery item per ingredient line.
+- `list_meals` / `plan_meal` -- read and write the meal plan, by date (`YYYY-MM-DD`) and meal type (breakfast/lunch/dinner/snack).
+- `list_pantry` -- read-only pantry inventory.
+- `sync_status` -- sync counters; also a simple connectivity/auth check.
+
+#### Pantry is read-only
+
+Paprika's pantry *write* schema isn't documented in any known source (not the community API references, not the local SQLite schema docs). Rather than guess at field names and risk silent no-op writes, this server only reads pantry data.
+
+## Remote Access (Streamable HTTP + OAuth, for Gemini)
+
+Gemini's "Custom apps for Spark" connector requires a remote MCP server over **Streamable HTTP**, gated by **OAuth 2.1** -- it does not support stdio or any bearer-token/API-key field. This fork adds exactly that as a second entrypoint, alongside (not instead of) the stdio one used above.
+
+The OAuth server here is intentionally minimal: single-user, gated by **one passphrase** you set yourself, with **no Dynamic Client Registration** -- clients are pre-registered with the `register-client` CLI command instead. This is deliberately simpler than a full identity system, appropriate for a server with exactly one owner.
+
+### 1. Deploy
+
+The included `Dockerfile` and `fly.toml` deploy to [Fly.io](https://fly.io) as a single container with a persistent volume for the OAuth database and Paprika's recipe cache:
+
+```bash
+fly launch --no-deploy   # or: fly apps create <name>
+fly volumes create paprika_data --size 1 --region <region>
+fly secrets set \
+  PUBLIC_BASE_URL="https://<your-app>.fly.dev" \
+  MCP_PASSPHRASE="<a strong passphrase you choose>" \
+  JWT_SECRET="<a random 32+ byte secret>" \
+  PAPRIKA_EMAIL="your@email.com" \
+  PAPRIKA_PASSWORD="yourpassword" \
+  PAPRIKA_USER_AGENT="<see note below>"
+fly deploy
+```
+
+**`PAPRIKA_USER_AGENT`**: `paprika_recipes`' User-Agent auto-detection reads the installed Paprika.app on macOS, which doesn't exist in a container. Get the string once from a Mac with Paprika installed:
+
+```bash
+python3 -c "
+import plistlib, platform
+from pathlib import Path
+p = Path('/Applications/Paprika Recipe Manager 3.app/Contents/Info.plist')
+with open(p, 'rb') as f:
+    plist = plistlib.load(f)
+print(f\"Paprika Recipe Manager 3/{plist['CFBundleShortVersionString']} \"
+      f\"({plist['CFBundleIdentifier']}; build:{plist['CFBundleVersion']}; \"
+      f\"macOS {platform.mac_ver()[0]})\")
+"
+```
+
+and set it as a literal string secret (not auto-detected at runtime, since the container has no Paprika.app to read).
+
+Any other host that runs a container works too (Cloud Run, Fly's Dockerfile is generic); `HOME=/data` (set in the `Dockerfile`) just needs to point at writable persistent storage.
+
+### 2. Register a client
+
+Run once, against the deployed environment (e.g. via `fly ssh console`):
+
+```bash
+paprika-mcp register-client --redirect-uri "<redirect URI Gemini shows you>" --name "Gemini"
+```
+
+This prints a Client ID and Client Secret **once** -- copy them immediately.
+
+### 3. Connect Gemini
+
+In the Gemini app: **Settings & help → Connected Apps → Custom apps for Spark → Add a custom app**, and enter your server's `/mcp` URL (e.g. `https://<your-app>.fly.dev/mcp`). Gemini does not offer Dynamic Client Registration for this connector, so it will show **Advanced features → Show more** asking for OAuth credentials -- note the redirect URI it displays, register a client for that exact URI (step 2), and paste in the Client ID/Secret. Authorizing then just asks for your passphrase.
+
+Requires a personal (non-Workspace) Google account; Google documents this connector as US-only, 18+, with Keep Activity enabled.
+
+### Local testing
+
+```bash
+PUBLIC_BASE_URL=http://127.0.0.1:8000 \
+MCP_PASSPHRASE=test-pass \
+JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') \
+paprika-mcp serve
+```
+
+then point [MCP Inspector](https://github.com/modelcontextprotocol/inspector) (`npx @modelcontextprotocol/inspector@latest`) at `http://127.0.0.1:8000/mcp` and walk the OAuth flow (register a test client first, as in step 2, against `http://127.0.0.1:8000`).
+
 ### Code Changes and Rebuilding
 
 The package is installed in **editable mode** (`pip install -e .`), so:
@@ -276,8 +366,8 @@ npm install
 
 ## Security Notes
 
-- Credentials are stored in plain text in `~/.paprika-mcp/config.json`
-- Environment variables (`PAPRIKA_EMAIL`, `PAPRIKA_PASSWORD`) are also supported
+- Stdio transport: credentials are stored in plain text in `~/.paprika-mcp/config.json`; environment variables (`PAPRIKA_EMAIL`, `PAPRIKA_PASSWORD`) are also supported.
+- Remote (HTTP) transport: `/authorize` is gated by `MCP_PASSPHRASE`; client secrets, authorization codes, and refresh tokens are stored only as SHA-256 hashes in SQLite; access tokens are short-lived signed JWTs; refresh tokens rotate on use, and reusing a consumed refresh token revokes the client's whole token family. See [`src/paprika_mcp/http/oauth.py`](src/paprika_mcp/http/oauth.py) for the full flow.
 
 ## License
 
