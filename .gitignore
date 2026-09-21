@@ -404,3 +404,7 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.toptal.com/developers/gitignore/api/python,node,sublimetext,vscode,macos,windows
+
+# Private operational notes with real secrets (admin secret, passphrase,
+# per-person client registration steps). Never commit.
+PRIVATE-*.md
