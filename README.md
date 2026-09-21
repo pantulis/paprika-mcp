@@ -274,14 +274,14 @@ Paprika's pantry *write* schema isn't documented in any known source (not the co
 
 Gemini's "Custom apps for Spark" connector requires a remote MCP server over **Streamable HTTP**, gated by **OAuth 2.1** -- it does not support stdio or any bearer-token/API-key field. This fork adds exactly that as a second entrypoint, alongside (not instead of) the stdio one used above.
 
-The OAuth server here is intentionally minimal: single-user, gated by **one passphrase** you set yourself, with **no Dynamic Client Registration** -- clients are pre-registered with the `register-client` CLI command instead. This is deliberately simpler than a full identity system, appropriate for a server with exactly one owner.
+The OAuth server here is intentionally minimal: single-user, gated by **one passphrase** you set yourself, with **no Dynamic Client Registration** -- clients are pre-registered instead, either with the `register-client` CLI command or the equivalent secret-gated `/admin/register-client` HTTP endpoint (see step 2). This is deliberately simpler than a full identity system, appropriate for a server with exactly one owner.
 
 ### 1. Deploy
 
 The included `render.yaml` blueprint deploys to [Render](https://render.com) as two free-plan services, no credit card: the `Dockerfile` as a web service, and a Key Value (Redis-protocol) instance holding OAuth state and the recipe cache -- Render's free web-service disk is ephemeral, so neither can live on local disk. See [`render.yaml`](render.yaml) for exactly what's declared.
 
 1. In the Render dashboard: **New → Blueprint**, point it at this repo, and deploy. `REDIS_URL` is wired between the two services automatically -- nothing to copy by hand.
-2. Once the web service exists, set its remaining env vars (Render dashboard → the `paprika-mcp` service → Environment): `PUBLIC_BASE_URL` (its own public URL, e.g. `https://paprika-mcp.onrender.com`, no trailing slash), `MCP_PASSPHRASE` (a strong passphrase you choose), `JWT_SECRET` (a random 32+ byte secret), `PAPRIKA_EMAIL`, `PAPRIKA_PASSWORD`, and `PAPRIKA_USER_AGENT` (see below). Redeploy after setting these.
+2. Once the web service exists, set its remaining env vars (Render dashboard → the `paprika-mcp` service → Environment): `PUBLIC_BASE_URL` (its own public URL, e.g. `https://paprika-mcp.onrender.com`, no trailing slash), `MCP_PASSPHRASE` (a strong passphrase you choose), `JWT_SECRET` (a random 32+ byte secret), `ADMIN_SECRET` (a random secret, gates `/admin/register-client` -- see step 2), `PAPRIKA_EMAIL`, `PAPRIKA_PASSWORD`, and `PAPRIKA_USER_AGENT` (see below). Redeploy after setting these.
 
 **`PAPRIKA_USER_AGENT`**: `paprika_recipes`' User-Agent auto-detection reads the installed Paprika.app on macOS, which doesn't exist in a container. Get the string once from a Mac with Paprika installed:
 
@@ -306,13 +306,16 @@ and set it as a literal string env var (not auto-detected at runtime, since the 
 
 ### 2. Register a client
 
-Run once, against the deployed environment -- e.g. via Render's dashboard shell for the `paprika-mcp` service (so it reaches the same internal Key Value instance):
+Render's free plan supports neither `render ssh` nor one-off Jobs (both require a paid plan), and the free Key Value instance rejects connections from outside Render -- so `paprika-mcp register-client` (the CLI command) can't reach the deployed environment on a free plan. Instead, set `ADMIN_SECRET` (see step 1) and call the app's own admin endpoint over HTTPS:
 
 ```bash
-paprika-mcp register-client --redirect-uri "<redirect URI Gemini shows you>" --name "Gemini"
+curl -s https://paprika-mcp.onrender.com/admin/register-client \
+  -H "X-Admin-Secret: <your ADMIN_SECRET>" \
+  -H "Content-Type: application/json" \
+  -d '{"redirect_uri": "<redirect URI Gemini shows you>", "name": "Gemini"}'
 ```
 
-This prints a Client ID and Client Secret **once** -- copy them immediately.
+Returns `client_id` and `client_secret` **once** in the JSON response -- copy them immediately. (If you're deploying somewhere that *does* give you shell access -- a paid Render plan, or any other host -- `paprika-mcp register-client --redirect-uri ... --name ...` does the same thing without needing `ADMIN_SECRET` at all.)
 
 ### 3. Connect Gemini
 
@@ -365,6 +368,7 @@ npm install
 
 - Stdio transport: credentials are stored in plain text in `~/.paprika-mcp/config.json`; environment variables (`PAPRIKA_EMAIL`, `PAPRIKA_PASSWORD`) are also supported.
 - Remote (HTTP) transport: `/authorize` is gated by `MCP_PASSPHRASE`; client secrets and refresh tokens are stored only as SHA-256 hashes in Redis; access tokens are short-lived signed JWTs; refresh tokens rotate on use, and reusing a consumed refresh token revokes the client's whole token family. See [`src/paprika_mcp/http/oauth.py`](src/paprika_mcp/http/oauth.py) for the full flow, and [`src/paprika_mcp/http/store.py`](src/paprika_mcp/http/store.py) for why Render's free Key Value's lack of a durability guarantee was an accepted tradeoff rather than an oversight.
+- `/admin/register-client` (see [`src/paprika_mcp/http/admin.py`](src/paprika_mcp/http/admin.py)) is gated by a separate secret, `ADMIN_SECRET` -- deliberately not the same one as `/authorize`, since the two guard different things. Leaving `ADMIN_SECRET` unset disables the endpoint (404) rather than leaving it unguarded. Only needed because Render's free plan offers no other way to reach the server's environment; skip it entirely on a host that gives you shell access, and use the CLI command instead.
 
 ## License
 

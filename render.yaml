@@ -16,6 +16,11 @@
 #                        https://paprika-mcp.onrender.com (no trailing slash)
 #   MCP_PASSPHRASE    -- the passphrase that gates /authorize
 #   JWT_SECRET        -- a random 32+ byte secret for signing access tokens
+#   ADMIN_SECRET      -- gates POST /admin/register-client (see http/admin.py).
+#                        Render's free plan supports neither `render ssh` nor
+#                        one-off Jobs, so this HTTP endpoint is how OAuth
+#                        clients get registered instead of the CLI command.
+#                        Leaving this unset disables the endpoint entirely.
 #   PAPRIKA_EMAIL / PAPRIKA_PASSWORD -- your Paprika account credentials
 #   PAPRIKA_USER_AGENT -- see README; auto-detection needs a real Paprika.app,
 #                          which doesn't exist in this container
@@ -38,6 +43,8 @@ services:
       - key: MCP_PASSPHRASE
         sync: false
       - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_SECRET
         sync: false
       - key: PAPRIKA_EMAIL
         sync: false

@@ -12,6 +12,7 @@ class Config:
     passphrase: str
     jwt_secret: str
     redis_url: str  # e.g. Render Key Value's internal redis:// connection string
+    admin_secret: str | None = None  # gates POST /admin/register-client, if set
     access_token_ttl: int = 3600
     refresh_token_ttl: int = 60 * 60 * 24 * 90  # 90 days
     auth_code_ttl: int = 60
@@ -53,4 +54,5 @@ class Config:
             passphrase=passphrase,  # type: ignore[arg-type]
             jwt_secret=jwt_secret,  # type: ignore[arg-type]
             redis_url=redis_url,  # type: ignore[arg-type]
+            admin_secret=os.environ.get("ADMIN_SECRET") or None,
         )

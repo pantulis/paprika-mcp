@@ -19,6 +19,7 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..server import app as mcp_server
+from .admin import register_client as admin_register_client
 from .auth_middleware import BearerAuthMiddleware
 from .config import Config
 from .oauth import (
@@ -71,6 +72,7 @@ def create_app() -> ASGIApp:
             ),
             Route("/authorize", authorize, methods=["GET", "POST"]),
             Route("/token", token, methods=["POST"]),
+            Route("/admin/register-client", admin_register_client, methods=["POST"]),
             Mount("/mcp", app=handle_mcp),
         ],
         lifespan=lifespan,
@@ -78,5 +80,8 @@ def create_app() -> ASGIApp:
     starlette_app.state.config = config
     starlette_app.state.store = store
 
-    # Only /mcp is gated; /authorize, /token, /.well-known/*, /healthz stay open.
+    # Only /mcp is gated by BearerAuthMiddleware; /authorize, /token,
+    # /.well-known/*, /healthz stay open. /admin/register-client guards
+    # itself (ADMIN_SECRET header, see admin.py) rather than going through
+    # the middleware, since it's a different kind of secret entirely.
     return BearerAuthMiddleware(starlette_app, config)
