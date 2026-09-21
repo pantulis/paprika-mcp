@@ -49,3 +49,8 @@ services:
   - type: keyvalue
     name: paprika-mcp-kv
     plan: free
+    # Required field. Empty means no external/public-internet access at all
+    # -- matches the free plan's reality (external isn't supported on it
+    # anyway) and is also what we actually want: only the web service above,
+    # reached over Render's internal network, should ever talk to this.
+    ipAllowList: []
