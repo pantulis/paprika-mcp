@@ -8,10 +8,10 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Config:
-    base_url: str  # e.g. "https://paprika-mcp.fly.dev" -- no trailing slash
+    base_url: str  # e.g. "https://paprika-mcp.onrender.com" -- no trailing slash
     passphrase: str
     jwt_secret: str
-    db_path: str
+    redis_url: str  # e.g. Render Key Value's internal redis:// connection string
     access_token_ttl: int = 3600
     refresh_token_ttl: int = 60 * 60 * 24 * 90  # 90 days
     auth_code_ttl: int = 60
@@ -26,6 +26,7 @@ class Config:
         base_url = os.environ.get("PUBLIC_BASE_URL")
         passphrase = os.environ.get("MCP_PASSPHRASE")
         jwt_secret = os.environ.get("JWT_SECRET")
+        redis_url = os.environ.get("REDIS_URL")
 
         missing = [
             name
@@ -33,6 +34,7 @@ class Config:
                 ("PUBLIC_BASE_URL", base_url),
                 ("MCP_PASSPHRASE", passphrase),
                 ("JWT_SECRET", jwt_secret),
+                ("REDIS_URL", redis_url),
             )
             if not value
         ]
@@ -40,13 +42,15 @@ class Config:
             raise RuntimeError(
                 f"Missing required environment variable(s): {', '.join(missing)}. "
                 "PUBLIC_BASE_URL is the server's own public URL, e.g. "
-                "https://paprika-mcp.fly.dev (no trailing slash)."
+                "https://paprika-mcp.onrender.com (no trailing slash). REDIS_URL "
+                "points at a Redis-protocol server (Render Key Value in "
+                "production, or e.g. redis://localhost:6379 for local dev -- "
+                "see README's 'Remote Access' section)."
             )
 
-        default_db = os.path.expanduser("~/.paprika-mcp/oauth.db")
         return cls(
             base_url=base_url.rstrip("/"),  # type: ignore[union-attr]
             passphrase=passphrase,  # type: ignore[arg-type]
             jwt_secret=jwt_secret,  # type: ignore[arg-type]
-            db_path=os.environ.get("PAPRIKA_MCP_DB", default_db),
+            redis_url=redis_url,  # type: ignore[arg-type]
         )

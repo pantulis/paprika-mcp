@@ -38,7 +38,7 @@ async def healthz(request: Request) -> JSONResponse:
 
 def create_app() -> ASGIApp:
     config = Config.from_env()
-    store = Store(config.db_path)
+    store = Store.from_url(config.redis_url)
 
     session_manager = StreamableHTTPSessionManager(
         app=mcp_server,
@@ -57,6 +57,7 @@ def create_app() -> ASGIApp:
             )
             yield
             logger.info("paprika-mcp HTTP server shutting down")
+            await store.aclose()
 
     starlette_app = Starlette(
         routes=[

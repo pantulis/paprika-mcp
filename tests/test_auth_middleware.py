@@ -24,8 +24,7 @@ async def test_mcp_rejects_garbage_token(client):
     assert resp.json()["error"] == "invalid_token"
 
 
-async def test_mcp_rejects_expired_token(client, app_and_store):
-    _, store = app_and_store
+async def test_mcp_rejects_expired_token(client):
     payload = {
         "iss": "http://testserver",
         "aud": "http://testserver/mcp",

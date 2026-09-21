@@ -278,20 +278,10 @@ The OAuth server here is intentionally minimal: single-user, gated by **one pass
 
 ### 1. Deploy
 
-The included `Dockerfile` and `fly.toml` deploy to [Fly.io](https://fly.io) as a single container with a persistent volume for the OAuth database and Paprika's recipe cache:
+The included `render.yaml` blueprint deploys to [Render](https://render.com) as two free-plan services, no credit card: the `Dockerfile` as a web service, and a Key Value (Redis-protocol) instance holding OAuth state and the recipe cache -- Render's free web-service disk is ephemeral, so neither can live on local disk. See [`render.yaml`](render.yaml) for exactly what's declared.
 
-```bash
-fly launch --no-deploy   # or: fly apps create <name>
-fly volumes create paprika_data --size 1 --region <region>
-fly secrets set \
-  PUBLIC_BASE_URL="https://<your-app>.fly.dev" \
-  MCP_PASSPHRASE="<a strong passphrase you choose>" \
-  JWT_SECRET="<a random 32+ byte secret>" \
-  PAPRIKA_EMAIL="your@email.com" \
-  PAPRIKA_PASSWORD="yourpassword" \
-  PAPRIKA_USER_AGENT="<see note below>"
-fly deploy
-```
+1. In the Render dashboard: **New → Blueprint**, point it at this repo, and deploy. `REDIS_URL` is wired between the two services automatically -- nothing to copy by hand.
+2. Once the web service exists, set its remaining env vars (Render dashboard → the `paprika-mcp` service → Environment): `PUBLIC_BASE_URL` (its own public URL, e.g. `https://paprika-mcp.onrender.com`, no trailing slash), `MCP_PASSPHRASE` (a strong passphrase you choose), `JWT_SECRET` (a random 32+ byte secret), `PAPRIKA_EMAIL`, `PAPRIKA_PASSWORD`, and `PAPRIKA_USER_AGENT` (see below). Redeploy after setting these.
 
 **`PAPRIKA_USER_AGENT`**: `paprika_recipes`' User-Agent auto-detection reads the installed Paprika.app on macOS, which doesn't exist in a container. Get the string once from a Mac with Paprika installed:
 
@@ -308,13 +298,15 @@ print(f\"Paprika Recipe Manager 3/{plist['CFBundleShortVersionString']} \"
 "
 ```
 
-and set it as a literal string secret (not auto-detected at runtime, since the container has no Paprika.app to read).
+and set it as a literal string env var (not auto-detected at runtime, since the container has no Paprika.app to read).
 
-Any other host that runs a container works too (Cloud Run, Fly's Dockerfile is generic); `HOME=/data` (set in the `Dockerfile`) just needs to point at writable persistent storage.
+**Accepted tradeoff**: Render's free Key Value has no documented restart guarantee (see [`http/store.py`](src/paprika_mcp/http/store.py)'s module docstring). If it ever resets, redo step 2 below and re-authorize once in Gemini -- your actual Paprika data is never at risk, only this server's own session state and recipe cache, both cheaply rebuilt. A genuinely durable alternative (e.g. Upstash Redis) was considered and deliberately not used, to stay on one vendor.
+
+**Cold starts**: Render's free web service sleeps after 15 minutes idle (~1 min to wake). [`.github/workflows/keep-warm.yml`](.github/workflows/keep-warm.yml) pings `/healthz` every 10 minutes to avoid this -- set the `PAPRIKA_MCP_URL` repository variable (Settings → Secrets and variables → Actions → Variables) to your deployed URL to enable it.
 
 ### 2. Register a client
 
-Run once, against the deployed environment (e.g. via `fly ssh console`):
+Run once, against the deployed environment -- e.g. via Render's dashboard shell for the `paprika-mcp` service (so it reaches the same internal Key Value instance):
 
 ```bash
 paprika-mcp register-client --redirect-uri "<redirect URI Gemini shows you>" --name "Gemini"
@@ -324,20 +316,25 @@ This prints a Client ID and Client Secret **once** -- copy them immediately.
 
 ### 3. Connect Gemini
 
-In the Gemini app: **Settings & help → Connected Apps → Custom apps for Spark → Add a custom app**, and enter your server's `/mcp` URL (e.g. `https://<your-app>.fly.dev/mcp`). Gemini does not offer Dynamic Client Registration for this connector, so it will show **Advanced features → Show more** asking for OAuth credentials -- note the redirect URI it displays, register a client for that exact URI (step 2), and paste in the Client ID/Secret. Authorizing then just asks for your passphrase.
+In the Gemini app: **Settings & help → Connected Apps → Custom apps for Spark → Add a custom app**, and enter your server's `/mcp` URL (e.g. `https://paprika-mcp.onrender.com/mcp`). Gemini does not offer Dynamic Client Registration for this connector, so it will show **Advanced features → Show more** asking for OAuth credentials -- note the redirect URI it displays, register a client for that exact URI (step 2), and paste in the Client ID/Secret. Authorizing then just asks for your passphrase.
 
 Requires a personal (non-Workspace) Google account; Google documents this connector as US-only, 18+, with Keep Activity enabled.
 
 ### Local testing
 
+Render's free Key Value instance doesn't support external connections at all -- it's Render-internal only -- so local development runs against a real local Redis/Valkey container instead of a cloud one, over the exact same code path:
+
 ```bash
+docker run -d --name paprika-dev-redis -p 6379:6379 valkey/valkey:8
+
 PUBLIC_BASE_URL=http://127.0.0.1:8000 \
 MCP_PASSPHRASE=test-pass \
 JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') \
+REDIS_URL=redis://localhost:6379 \
 paprika-mcp serve
 ```
 
-then point [MCP Inspector](https://github.com/modelcontextprotocol/inspector) (`npx @modelcontextprotocol/inspector@latest`) at `http://127.0.0.1:8000/mcp` and walk the OAuth flow (register a test client first, as in step 2, against `http://127.0.0.1:8000`).
+then point [MCP Inspector](https://github.com/modelcontextprotocol/inspector) (`npx @modelcontextprotocol/inspector@latest`) at `http://127.0.0.1:8000/mcp` and walk the OAuth flow (register a test client first, as in step 2, with `REDIS_URL=redis://localhost:6379` set the same way).
 
 ### Code Changes and Rebuilding
 
@@ -367,7 +364,7 @@ npm install
 ## Security Notes
 
 - Stdio transport: credentials are stored in plain text in `~/.paprika-mcp/config.json`; environment variables (`PAPRIKA_EMAIL`, `PAPRIKA_PASSWORD`) are also supported.
-- Remote (HTTP) transport: `/authorize` is gated by `MCP_PASSPHRASE`; client secrets, authorization codes, and refresh tokens are stored only as SHA-256 hashes in SQLite; access tokens are short-lived signed JWTs; refresh tokens rotate on use, and reusing a consumed refresh token revokes the client's whole token family. See [`src/paprika_mcp/http/oauth.py`](src/paprika_mcp/http/oauth.py) for the full flow.
+- Remote (HTTP) transport: `/authorize` is gated by `MCP_PASSPHRASE`; client secrets and refresh tokens are stored only as SHA-256 hashes in Redis; access tokens are short-lived signed JWTs; refresh tokens rotate on use, and reusing a consumed refresh token revokes the client's whole token family. See [`src/paprika_mcp/http/oauth.py`](src/paprika_mcp/http/oauth.py) for the full flow, and [`src/paprika_mcp/http/store.py`](src/paprika_mcp/http/store.py) for why Render's free Key Value's lack of a durability guarantee was an accepted tradeoff rather than an oversight.
 
 ## License
 

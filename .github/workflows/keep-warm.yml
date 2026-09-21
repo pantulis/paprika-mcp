@@ -1,0 +1,34 @@
+name: Keep Render service warm
+
+# Render's free web services spin down after 15 minutes of no inbound
+# traffic (~1 min cold start on the next request). Pinging /healthz every
+# 10 minutes keeps it warm -- ~744 pings/month at 1 hour of Render's free
+# 750 instance-hours each, right under the cap for a 31-day month.
+#
+# This has no effect on the separate free Key Value instance's own
+# durability, which has no documented restart guarantee either way -- see
+# README's "Remote Access" section.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /healthz
+        run: |
+          set -e
+          url="${{ vars.PAPRIKA_MCP_URL }}/healthz"
+          if [ -z "${{ vars.PAPRIKA_MCP_URL }}" ]; then
+            echo "PAPRIKA_MCP_URL repository variable is not set -- skipping."
+            exit 0
+          fi
+          status=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+          echo "GET $url -> $status"
+          if [ "$status" != "200" ]; then
+            echo "Unexpected status from $url"
+            exit 1
+          fi

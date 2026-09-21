@@ -1,0 +1,51 @@
+# Render Blueprint -- deploys paprika-mcp's remote (Streamable HTTP + OAuth)
+# transport, for connecting to Gemini's "Custom apps for Spark".
+#
+# Two services, both free plan, no credit card:
+#  - `paprika-mcp` (web): the Dockerfile in this repo, serving /mcp and the
+#    OAuth endpoints.
+#  - `paprika-mcp-kv` (keyvalue): OAuth state (clients, auth codes, refresh
+#    tokens) and the Paprika recipe cache. Render's free Key Value has no
+#    documented restart/durability guarantee -- an accepted tradeoff for
+#    staying on one vendor. See README's "Remote Access" section.
+#
+# `REDIS_URL` is wired automatically between the two services below; nothing
+# to copy by hand. The remaining env vars are `sync: false` (set once via
+# the Render dashboard after the first deploy, never committed):
+#   PUBLIC_BASE_URL   -- this service's own public URL, e.g.
+#                        https://paprika-mcp.onrender.com (no trailing slash)
+#   MCP_PASSPHRASE    -- the passphrase that gates /authorize
+#   JWT_SECRET        -- a random 32+ byte secret for signing access tokens
+#   PAPRIKA_EMAIL / PAPRIKA_PASSWORD -- your Paprika account credentials
+#   PAPRIKA_USER_AGENT -- see README; auto-detection needs a real Paprika.app,
+#                          which doesn't exist in this container
+
+services:
+  - type: web
+    name: paprika-mcp
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: paprika-mcp-kv
+          property: connectionString
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: MCP_PASSPHRASE
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: PAPRIKA_EMAIL
+        sync: false
+      - key: PAPRIKA_PASSWORD
+        sync: false
+      - key: PAPRIKA_USER_AGENT
+        sync: false
+
+  - type: keyvalue
+    name: paprika-mcp-kv
+    plan: free

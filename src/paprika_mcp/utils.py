@@ -7,9 +7,11 @@ import unicodedata
 from typing import Any
 
 import requests
-from paprika_recipes.cache import DirectoryCache
+from paprika_recipes.cache import Cache, DirectoryCache
 from paprika_recipes.exceptions import PaprikaError, RequestError
 from paprika_recipes.remote import Remote
+
+from .paprika_cache import RedisCache
 
 logger = logging.getLogger(__name__)
 
@@ -87,13 +89,31 @@ def get_user_agent() -> str | None:
     return None
 
 
+def get_recipe_cache() -> Cache:
+    """Get the recipe cache backend for `Remote`.
+
+    If `REDIS_URL` is set (the remote HTTP transport on Render), uses
+    `RedisCache` -- Render's free web-service disk is ephemeral, so a local
+    `DirectoryCache` there would turn every cold start into a full re-fetch
+    of every recipe. Otherwise (local/stdio use) falls back to the local
+    `DirectoryCache`, where a persistent disk is the normal expectation.
+    """
+    redis_url = os.environ.get("REDIS_URL")
+    if redis_url:
+        return RedisCache(redis_url)
+
+    cache_dir = os.path.expanduser("~/.paprika-mcp/cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    return DirectoryCache(cache_dir)
+
+
 def get_remote() -> Remote:
     """Get authenticated Remote instance using stored credentials.
 
-    The Remote class uses a DirectoryCache to store recipe data locally:
+    The Remote class uses a Cache (see `get_recipe_cache`) to store recipe
+    data locally or in Redis:
     - Recipe metadata (list of UIDs/hashes) is always fetched fresh from the API
-    - Individual recipe details are cached in ~/.paprika-mcp/cache/
-    - Cached recipes are keyed by UID and validated by hash
+    - Individual recipe details are cached, keyed by UID and validated by hash
     - If a recipe's hash matches the cache, the cached version is used
     - If hash differs or not cached, recipe is fetched from API and cached
 
@@ -107,11 +127,7 @@ def get_remote() -> Remote:
     """
     email, password = get_credentials()
     user_agent = get_user_agent()
-
-    # Use cache to avoid re-downloading recipes
-    cache_dir = os.path.expanduser("~/.paprika-mcp/cache")
-    os.makedirs(cache_dir, exist_ok=True)
-    cache = DirectoryCache(cache_dir)
+    cache = get_recipe_cache()
 
     try:
         # Use 30 second timeout to prevent hanging on network issues

@@ -11,12 +11,10 @@ COPY src ./src
 
 RUN pip install --no-cache-dir .
 
-# HOME points at the Fly volume mount so paprika-recipes' recipe cache
-# (~/.paprika-mcp/cache) and the OAuth SQLite store (~/.paprika-mcp/oauth.db,
-# see http/config.py's default) both land on persistent storage without
-# needing extra env vars wired through the app.
-ENV HOME=/data \
-    PORT=8000
+# OAuth state and the recipe cache both live in Redis (Render Key Value in
+# production, via REDIS_URL -- see http/config.py and paprika_cache.py), not
+# on local disk, since Render's free web-service filesystem is ephemeral.
+ENV PORT=8000
 
 EXPOSE 8000
 

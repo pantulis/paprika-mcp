@@ -22,7 +22,6 @@ import html
 import secrets
 import time
 
-import anyio
 import jwt
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -211,7 +210,7 @@ async def authorize(request: Request) -> Response:
             status_code=400,
         )
 
-    client = await anyio.to_thread.run_sync(store.get_client, client_id)
+    client = await store.get_client(client_id)
     if not client:
         return JSONResponse({"error": "invalid_client"}, status_code=400)
     if not secrets.compare_digest(client["redirect_uri"], redirect_uri):
@@ -262,14 +261,8 @@ async def authorize(request: Request) -> Response:
         return HTMLResponse(page, status_code=401)
 
     code = secrets.token_urlsafe(32)
-    await anyio.to_thread.run_sync(
-        store.store_auth_code,
-        code,
-        client_id,
-        redirect_uri,
-        code_challenge,
-        scope,
-        config.auth_code_ttl,
+    await store.store_auth_code(
+        code, client_id, redirect_uri, code_challenge, scope, config.auth_code_ttl
     )
 
     separator = "&" if "?" in redirect_uri else "?"
@@ -298,9 +291,7 @@ async def token(request: Request) -> Response:
         client_id = form.get("client_id", "")
         client_secret = form.get("client_secret", "")
 
-    if not await anyio.to_thread.run_sync(
-        store.verify_client, client_id, client_secret
-    ):
+    if not await store.verify_client(client_id, client_secret):
         return JSONResponse({"error": "invalid_client"}, status_code=401)
 
     if grant_type == "authorization_code":
@@ -308,7 +299,7 @@ async def token(request: Request) -> Response:
         redirect_uri = form.get("redirect_uri", "")
         code_verifier = form.get("code_verifier", "")
 
-        row = await anyio.to_thread.run_sync(store.consume_auth_code, code, client_id)
+        row = await store.consume_auth_code(code, client_id)
         if not row:
             return JSONResponse({"error": "invalid_grant"}, status_code=400)
         if not secrets.compare_digest(row["redirect_uri"], redirect_uri):
@@ -331,12 +322,8 @@ async def token(request: Request) -> Response:
         scope = row["scope"]
         access_token = _issue_access_token(config, client_id, scope)
         refresh_token = secrets.token_urlsafe(32)
-        await anyio.to_thread.run_sync(
-            store.store_refresh_token,
-            refresh_token,
-            client_id,
-            scope,
-            config.refresh_token_ttl,
+        await store.store_refresh_token(
+            refresh_token, client_id, scope, config.refresh_token_ttl
         )
         return JSONResponse(
             {
@@ -350,21 +337,15 @@ async def token(request: Request) -> Response:
 
     if grant_type == "refresh_token":
         refresh_token_value = form.get("refresh_token", "")
-        row = await anyio.to_thread.run_sync(
-            store.consume_refresh_token, refresh_token_value, client_id
-        )
+        row = await store.consume_refresh_token(refresh_token_value, client_id)
         if not row:
             return JSONResponse({"error": "invalid_grant"}, status_code=400)
 
         scope = row["scope"]
         access_token = _issue_access_token(config, client_id, scope)
         new_refresh_token = secrets.token_urlsafe(32)
-        await anyio.to_thread.run_sync(
-            store.store_refresh_token,
-            new_refresh_token,
-            client_id,
-            scope,
-            config.refresh_token_ttl,
+        await store.store_refresh_token(
+            new_refresh_token, client_id, scope, config.refresh_token_ttl
         )
         return JSONResponse(
             {

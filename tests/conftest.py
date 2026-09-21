@@ -6,6 +6,7 @@ import base64
 import hashlib
 import secrets
 
+import fakeredis
 import httpx
 import pytest
 from asgi_lifespan import LifespanManager
@@ -14,6 +15,7 @@ from paprika_mcp.http.store import Store
 
 TEST_PASSPHRASE = "correct-horse-battery-staple"
 TEST_REDIRECT_URI = "https://client.example.com/callback"
+TEST_REDIS_URL = "redis://fake-test-server/0"
 
 
 def make_pkce_pair() -> tuple[str, str]:
@@ -25,25 +27,37 @@ def make_pkce_pair() -> tuple[str, str]:
 
 
 @pytest.fixture
-def store(tmp_path) -> Store:
-    return Store(str(tmp_path / "oauth.db"))
+def store() -> Store:
+    """A Store backed by an isolated in-memory fake Redis (no real server
+    needed -- see http/store.py; production talks to Render Key Value over
+    the same `redis.asyncio` interface fakeredis mirrors)."""
+    return Store(fakeredis.FakeAsyncRedis(decode_responses=True))
 
 
 @pytest.fixture
-def app_and_store(monkeypatch, tmp_path):
-    """Build the real Starlette app against a temp SQLite DB, with one
-    pre-registered test client (mirroring `register-client`)."""
-    db_path = str(tmp_path / "oauth.db")
+async def app_and_store(monkeypatch):
+    """Build the real Starlette app against a fake Redis, with one
+    pre-registered test client (mirroring `register-client`).
+
+    `paprika_mcp.http.store.Redis` is patched to fakeredis's async client so
+    `create_app()`'s internal `Store.from_url(...)` call transparently gets
+    a fake backend. Every `from_url()` call sharing `TEST_REDIS_URL` sees
+    the same in-memory data, so the pre-registered client below is visible
+    to the app's own store too.
+    """
+    monkeypatch.setattr("paprika_mcp.http.store.Redis", fakeredis.FakeAsyncRedis)
     monkeypatch.setenv("PUBLIC_BASE_URL", "http://testserver")
     monkeypatch.setenv("MCP_PASSPHRASE", TEST_PASSPHRASE)
     monkeypatch.setenv("JWT_SECRET", "test-jwt-secret-that-is-long-enough-for-hs256")
-    monkeypatch.setenv("PAPRIKA_MCP_DB", db_path)
+    monkeypatch.setenv("REDIS_URL", TEST_REDIS_URL)
 
     from paprika_mcp.http.app import create_app
 
     app = create_app()
-    test_store = Store(db_path)
-    test_store.create_client("client-1", "secret-1", "Test Client", TEST_REDIRECT_URI)
+    test_store = Store.from_url(TEST_REDIS_URL)
+    await test_store.create_client(
+        "client-1", "secret-1", "Test Client", TEST_REDIRECT_URI
+    )
     return app, test_store
 
 

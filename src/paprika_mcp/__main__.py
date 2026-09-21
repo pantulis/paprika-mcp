@@ -1,5 +1,6 @@
 """CLI utilities for paprika-mcp."""
 
+import asyncio
 import json
 import os
 import secrets
@@ -54,9 +55,9 @@ def setup_credentials():
 def serve():
     """Run the remote (Streamable HTTP + OAuth) server, for clients like Gemini.
 
-    Reads PUBLIC_BASE_URL, MCP_PASSPHRASE, JWT_SECRET (required) and PORT,
-    PAPRIKA_MCP_DB (optional) from the environment. Local stdio clients
-    (e.g. Claude Code) should keep using the default `paprika-mcp` entrypoint
+    Reads PUBLIC_BASE_URL, MCP_PASSPHRASE, JWT_SECRET, REDIS_URL (required)
+    and PORT (optional) from the environment. Local stdio clients (e.g.
+    Claude Code) should keep using the default `paprika-mcp` entrypoint
     instead -- this is only for remote access.
     """
     import uvicorn
@@ -73,8 +74,9 @@ def register_client():
 
     Usage: paprika-mcp register-client --redirect-uri <uri> [--name <name>]
 
-    Run this once per client, against the same environment/database the
-    `serve` command uses (e.g. via `fly ssh console` in production). Prints
+    Run this once per client, against the same environment (REDIS_URL etc)
+    the `serve` command uses -- in production, over Render's shell for the
+    web service, so it reaches the same internal Key Value instance. Prints
     the Client ID and Secret exactly once -- copy them into the client's
     OAuth setup form immediately.
     """
@@ -99,12 +101,20 @@ def register_client():
         print("Usage: paprika-mcp register-client --redirect-uri <uri> [--name <name>]")
         sys.exit(1)
 
-    config = Config.from_env()
-    store = Store(config.db_path)
+    async def _register() -> tuple[str, str]:
+        config = Config.from_env()
+        store = Store.from_url(config.redis_url)
+        try:
+            client_id = secrets.token_urlsafe(16)
+            client_secret = secrets.token_urlsafe(32)
+            await store.create_client(
+                client_id, client_secret, client_name, redirect_uri
+            )
+            return client_id, client_secret
+        finally:
+            await store.aclose()
 
-    client_id = secrets.token_urlsafe(16)
-    client_secret = secrets.token_urlsafe(32)
-    store.create_client(client_id, client_secret, client_name, redirect_uri)
+    client_id, client_secret = asyncio.run(_register())
 
     print("Client registered.")
     print(f"  Client ID:     {client_id}")
